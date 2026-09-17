@@ -28,9 +28,7 @@ pub fn scan_required_files(tokens: &[Token]) -> Vec<String> {
                 match next_tok {
                     Token::Comment(_) | Token::StackComment(_) => continue,
                     Token::Word(arg_data) => {
-                        let target = arg_data
-                            .value
-                            .trim_matches(|c| c == '"' || c == '\'');
+                        let target = arg_data.value.trim_matches(|c| c == '"' || c == '\'');
                         if !target.is_empty() {
                             targets.push(target.to_string());
                         }
@@ -141,8 +139,7 @@ fn resolve_dependencies_recursive(
     let targets = scan_required_files(tokens);
 
     for target in targets {
-        if let Some(found_path) =
-            find_required_file(&target, current_dir, include_dirs, workspace)
+        if let Some(found_path) = find_required_file(&target, current_dir, include_dirs, workspace)
         {
             let canonical = found_path
                 .canonicalize()

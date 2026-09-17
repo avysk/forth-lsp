@@ -90,11 +90,7 @@ impl Formatter for DefaultFormatter {
 impl DefaultFormatter {
     fn count_gap_blank_lines(gap: &str) -> usize {
         let newlines = gap.chars().filter(|&c| c == '\n').count();
-        if newlines >= 2 {
-            newlines - 1
-        } else {
-            0
-        }
+        if newlines >= 2 { newlines - 1 } else { 0 }
     }
 
     fn is_doc_comment_start(tokens: &[Token], source: &str, idx: usize) -> bool {
@@ -135,7 +131,10 @@ impl DefaultFormatter {
         if colon_idx == 0 {
             return false;
         }
-        if !matches!(tokens[colon_idx - 1], Token::Comment(_) | Token::StackComment(_)) {
+        if !matches!(
+            tokens[colon_idx - 1],
+            Token::Comment(_) | Token::StackComment(_)
+        ) {
             return false;
         }
         let gap = &source[tokens[colon_idx - 1].get_data().end..tokens[colon_idx].get_data().start];
@@ -437,7 +436,10 @@ impl DefaultFormatter {
                             Self::set_trailing_blank_lines(&mut output, target);
                         } else if newlines > 0 {
                             let in_doc_block = i > 0
-                                && matches!(tokens[i - 1], Token::Comment(_) | Token::StackComment(_))
+                                && matches!(
+                                    tokens[i - 1],
+                                    Token::Comment(_) | Token::StackComment(_)
+                                )
                                 && matches!(tokens[i], Token::Comment(_) | Token::StackComment(_))
                                 && Self::count_gap_blank_lines(gap) == 0;
 
@@ -510,10 +512,8 @@ impl DefaultFormatter {
                 if Self::is_doc_comment_start(tokens, source, i) {
                     let source_blank_lines = Self::count_gap_blank_lines(gap);
                     let force_blank = seen_first_definition || !output.trim().is_empty();
-                    let target = self.target_blank_lines_before_definition(
-                        force_blank,
-                        source_blank_lines,
-                    );
+                    let target =
+                        self.target_blank_lines_before_definition(force_blank, source_blank_lines);
                     Self::set_trailing_blank_lines(&mut output, target);
                     line_start = true;
                 } else if matches!(token, Token::Colon(_)) {
@@ -1304,7 +1304,8 @@ dup ;";
         let config = FormatConfig::default();
         let formatter = DefaultFormatter::new(config, crate::config::default_skip_words());
 
-        let source = ": word1 1 ;\n\\ here comes\n\\ some comment block\n\\ documenting word\n: word2 2 ;";
+        let source =
+            ": word1 1 ;\n\\ here comes\n\\ some comment block\n\\ documenting word\n: word2 2 ;";
         let formatted = formatter.format_source(source).unwrap();
         let expected = ": word1\n  1 ;\n\n\\ here comes\n\\ some comment block\n\\ documenting word\n: word2\n  2 ;\n";
         assert_eq!(formatted, expected);
@@ -1371,9 +1372,11 @@ dup ;";
         };
         let formatter = DefaultFormatter::new(config, crate::config::default_skip_words());
 
-        let source = "\\ Section 1\n\n\n\\ Section 2\n\n: a 1 ;\n\n\\ doc for b\n: b 2 ;\n\n: c 3 ;";
+        let source =
+            "\\ Section 1\n\n\n\\ Section 2\n\n: a 1 ;\n\n\\ doc for b\n: b 2 ;\n\n: c 3 ;";
         let formatted = formatter.format_source(source).unwrap();
-        let expected = "\\ Section 1\n\\ Section 2\n: a\n  1 ;\n\n\\ doc for b\n: b\n  2 ;\n\n: c\n  3 ;\n";
+        let expected =
+            "\\ Section 1\n\\ Section 2\n: a\n  1 ;\n\n\\ doc for b\n: b\n  2 ;\n\n: c\n  3 ;\n";
         assert_eq!(formatted, expected);
     }
 
@@ -1469,8 +1472,7 @@ dup ;";
             let source = ": test 1 2 + ;\n\n\n\n\n";
             let formatted = formatter.format_source(source).unwrap();
             assert_eq!(
-                formatted,
-                ": test\n  1 2 + ;\n",
+                formatted, ": test\n  1 2 + ;\n",
                 "Failed for blank_lines variant {:?}",
                 variant
             );
@@ -1500,7 +1502,10 @@ dup ;";
 
         let source = ": first 1 ;\n\n\n\\ doc comment\n: second 2 ;";
         let formatted = formatter.format_source(source).unwrap();
-        assert_eq!(formatted, ": first\n  1 ;\n\n\n\\ doc comment\n: second\n  2 ;\n");
+        assert_eq!(
+            formatted,
+            ": first\n  1 ;\n\n\n\\ doc comment\n: second\n  2 ;\n"
+        );
     }
 
     #[test]
