@@ -5,8 +5,12 @@ use std::path::{Path, PathBuf};
 use crate::words::Word;
 
 /// Configuration for the Forth LSP server
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
+    /// Show doc-comments on hover when word definitions have preceding comments
+    #[serde(default = "default_true", alias = "doc-comments")]
+    pub doc_comments: bool,
+
     #[serde(default)]
     pub format: FormatConfig,
 
@@ -15,6 +19,17 @@ pub struct Config {
 
     #[serde(default)]
     pub workspace: WorkspaceConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            doc_comments: default_true(),
+            format: FormatConfig::default(),
+            builtin: BuiltinConfig::default(),
+            workspace: WorkspaceConfig::default(),
+        }
+    }
 }
 
 /// Workspace scanning configuration.
@@ -360,6 +375,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
+        assert!(config.doc_comments);
         assert_eq!(config.format.indent_width, 2);
         assert!(config.format.use_spaces);
         assert!(config.format.space_after_colon);
@@ -385,6 +401,27 @@ mod tests {
             config.builtin.skip_words,
             vec!["require", "include", "fload", "my-import"]
         );
+    }
+
+    #[test]
+    fn test_parse_doc_comments_config() {
+        let toml_false = r#"
+            doc_comments = false
+        "#;
+        let config_false: Config = toml::from_str(toml_false).unwrap();
+        assert!(!config_false.doc_comments);
+
+        let toml_kebab = r#"
+            doc-comments = false
+        "#;
+        let config_kebab: Config = toml::from_str(toml_kebab).unwrap();
+        assert!(!config_kebab.doc_comments);
+
+        let toml_true = r#"
+            doc_comments = true
+        "#;
+        let config_true: Config = toml::from_str(toml_true).unwrap();
+        assert!(config_true.doc_comments);
     }
 
     #[test]
