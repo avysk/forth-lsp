@@ -34,7 +34,6 @@ pub fn uri_to_path(uri: &Uri) -> Option<PathBuf> {
 /// Convert a file path to a URI.
 ///
 /// Returns None if the path cannot be converted to a valid file:// URI.
-#[allow(dead_code)]
 pub fn path_to_uri<P: AsRef<Path>>(path: P) -> Option<Uri> {
     let path_str = path.as_ref().to_str()?;
     path_str_to_uri(path_str)

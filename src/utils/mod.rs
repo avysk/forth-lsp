@@ -8,6 +8,7 @@ pub mod diagnostics;
 pub mod find_variant_sublists;
 pub mod find_variant_sublists_from_to;
 pub mod handlers;
+pub mod include_resolver;
 pub mod logging;
 pub mod ropey;
 pub mod server_capabilities;

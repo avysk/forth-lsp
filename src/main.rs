@@ -32,6 +32,7 @@ use crate::words::Words;
 
 use std::collections::HashMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, Message};
 use lsp_types::InitializeParams;
@@ -55,7 +56,7 @@ fn main() -> Result<()> {
     // Run the server and wait for the two threads to end (typically by trigger LSP Exit event).
     let server_capabilities = serde_json::to_value(forth_lsp_capabilities())?;
     let initialization_params = connection.initialize(server_capabilities)?;
-    main_loop(connection, initialization_params)?;
+    main_loop(connection, initialization_params, cli.include)?;
     io_threads.join()?;
 
     // Shut down gracefully.
@@ -63,7 +64,11 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn main_loop(connection: Connection, params: serde_json::Value) -> Result<()> {
+fn main_loop(
+    connection: Connection,
+    params: serde_json::Value,
+    cli_include_dirs: Vec<PathBuf>,
+) -> Result<()> {
     eprintln!("Starting main loop");
     let init: InitializeParams = serde_json::from_value(params)?;
     let mut files = HashMap::<String, Rope>::new();
@@ -89,12 +94,54 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<()> {
         }
     }
 
+    // Effective include paths: CLI paths first, then TOML workspace include paths
+    let mut include_dirs = cli_include_dirs;
+    let toml_includes = config
+        .workspace
+        .resolve_include_paths(workspace_root.as_deref().map(Path::new));
+    for toml_inc in toml_includes {
+        if !include_dirs.contains(&toml_inc) {
+            include_dirs.push(toml_inc);
+        }
+    }
+
+    // Scan all effective include directories
+    for inc_dir in &include_dirs {
+        if inc_dir.is_dir() {
+            if let Some(inc_str) = inc_dir.to_str() {
+                load_dir(inc_str, &mut files, &config.workspace)?;
+            }
+        } else {
+            eprintln!(
+                "Warning: include directory {:?} does not exist or is not a directory",
+                inc_dir
+            );
+        }
+    }
+
     // Build initial definition index from loaded files
     let mut def_index = DefinitionIndex::new();
     for (path, rope) in &files {
         def_index.update_file(path, rope);
     }
     eprintln!("Indexed {} files", files.len());
+
+    // Run dynamic dependency resolution on initially loaded files
+    let initial_files: Vec<(String, Rope)> =
+        files.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    for (file_uri, rope) in initial_files {
+        let source = rope.to_string();
+        let tokens = forth_lexer::parser::Lexer::new(&source).parse();
+        let file_path = path_str_to_uri(&file_uri).and_then(|u| uri_to_path(&u));
+        crate::utils::include_resolver::resolve_and_load_dependencies(
+            &tokens,
+            file_path.as_deref(),
+            &include_dirs,
+            &mut files,
+            &mut def_index,
+            &config.workspace,
+        );
+    }
 
     let mut data = Words::default();
     let custom_words = config.builtin.to_static_words(workspace_root.as_deref());
@@ -160,6 +207,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<()> {
                     &mut def_index,
                     &data,
                     &config,
+                    &include_dirs,
                 )
                 .is_ok()
                 {
@@ -172,6 +220,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<()> {
                     &mut def_index,
                     &data,
                     &config,
+                    &include_dirs,
                 )
                 .is_ok()
                 {

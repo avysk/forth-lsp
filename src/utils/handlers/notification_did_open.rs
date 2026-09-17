@@ -13,6 +13,11 @@ use ropey::Rope;
 
 use super::cast_notification;
 
+use std::path::PathBuf;
+
+use crate::utils::include_resolver::resolve_and_load_dependencies;
+use crate::utils::uri_helpers::uri_to_path;
+
 pub fn handle_did_open_text_document(
     notification: &Notification,
     connection: &Connection,
@@ -20,6 +25,7 @@ pub fn handle_did_open_text_document(
     def_index: &mut DefinitionIndex,
     builtin_words: &Words,
     config: &Config,
+    include_dirs: &[PathBuf],
 ) -> Result<()> {
     match cast_notification::<lsp_types::notification::DidOpenTextDocument>(notification.clone()) {
         Ok(params) => {
@@ -33,6 +39,17 @@ pub fn handle_did_open_text_document(
                 let tokens = Lexer::new(&source).parse();
 
                 def_index.update_file_from_tokens(&file_uri, &tokens, &rope);
+                e.insert(rope.clone());
+
+                let file_path = uri_to_path(&params.text_document.uri);
+                resolve_and_load_dependencies(
+                    &tokens,
+                    file_path.as_deref(),
+                    include_dirs,
+                    files,
+                    def_index,
+                    &config.workspace,
+                );
 
                 let diagnostics = get_diagnostics_from_tokens(
                     &tokens,
@@ -48,8 +65,6 @@ pub fn handle_did_open_text_document(
                     diagnostics,
                     params.text_document.version,
                 )?;
-
-                e.insert(rope);
             }
             Ok(())
         }
