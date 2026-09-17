@@ -1,6 +1,6 @@
 [package]
 name = "forth-lsp"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 description = "LSP for the Forth programming language"
 repository = "https://github.com/alexanderbrevig/forth-lsp"

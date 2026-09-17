@@ -153,7 +153,16 @@ fn main_loop(
                     return Ok(());
                 }
                 eprintln!("got request: {:?}", request.method);
-                if handle_hover(&request, &connection, &data, &mut files, &def_index).is_ok() {
+                if handle_hover(
+                    &request,
+                    &connection,
+                    &data,
+                    &mut files,
+                    &def_index,
+                    &config,
+                )
+                .is_ok()
+                {
                     continue;
                 }
                 if handle_completion(&request, &connection, &data, &mut files, &def_index).is_ok() {

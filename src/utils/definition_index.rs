@@ -13,12 +13,22 @@ use super::{
     token_utils::extract_word_name_with_range,
 };
 
+/// Details of a word definition in the index
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefinitionDetails {
+    pub file_path_or_uri: String,
+    pub range: Range,
+    pub stack_effect: Option<String>,
+    pub doc_comment: Option<String>,
+    pub constant_value: Option<String>,
+    pub is_colon_definition: bool,
+}
+
 /// Index of all word definitions and references across the workspace
 pub struct DefinitionIndex {
-    /// Maps lowercase word names to their definition locations
+    /// Maps lowercase word names to their definition details
     /// Key: word name (lowercase for case-insensitive lookup)
-    /// Value: list of (file_path, range, optional_stack_effect) tuples
-    definitions: HashMap<String, Vec<(String, Range, Option<String>)>>,
+    definitions: HashMap<String, Vec<DefinitionDetails>>,
     /// Maps lowercase word names to their reference (usage) locations
     /// Key: word name (lowercase for case-insensitive lookup)
     /// Value: list of (file_path, range) tuples
@@ -71,20 +81,36 @@ impl DefinitionIndex {
                 let name_data = Data::new(selection_start, selection_end, "");
                 let range = data_range_from_to(&name_data, &name_data, rope);
 
-                // Scan for a StackComment token to capture stack effect
-                let stack_effect = result.iter().skip(2).find_map(|tok| {
-                    if let Token::StackComment(data) = tok {
-                        Some(data.value.to_string())
+                // Extract doc comments directly preceding ':'
+                let colon_data = result[0].get_data();
+                let colon_line = rope.char_to_line(colon_data.start);
+                let doc_comment = extract_doc_comment_block(colon_line, rope);
+
+                // Immediate stack effect following the word name immediately (same or next line)
+                let word_line = rope.char_to_line(selection_start);
+                let stack_effect = if let Some(Token::StackComment(stack_data)) = result.get(2) {
+                    let comment_line = rope.char_to_line(stack_data.start);
+                    if comment_line == word_line || comment_line == word_line + 1 {
+                        Some(stack_data.value.trim().to_string())
                     } else {
                         None
                     }
-                });
+                } else {
+                    None
+                };
 
                 // Store with lowercase key for case-insensitive lookup
                 self.definitions
                     .entry(name.to_lowercase())
                     .or_default()
-                    .push((file_path.to_string(), range, stack_effect));
+                    .push(DefinitionDetails {
+                        file_path_or_uri: file_path.to_string(),
+                        range,
+                        stack_effect,
+                        doc_comment,
+                        constant_value: None,
+                        is_colon_definition: true,
+                    });
             }
         }
 
@@ -122,11 +148,46 @@ impl DefinitionIndex {
                         // Use only the name's range, not including the defining word
                         let range = name_data.to_range(rope);
 
+                        // Extract doc comments directly preceding the definition
+                        let def_line = rope.char_to_line(defining_word_data.start);
+                        let doc_comment = extract_doc_comment_block(def_line, rope);
+
+                        let is_constant = ["CONSTANT", "2CONSTANT", "FCONSTANT", "VALUE", "2VALUE"]
+                            .iter()
+                            .any(|&cw| cw.eq_ignore_ascii_case(defining_word_data.value));
+
+                        let constant_value = if is_constant {
+                            extract_constant_value(i, tokens, rope, &definition_token_indices)
+                        } else {
+                            None
+                        };
+
+                        // Immediate stack effect following the word name immediately (same or next line)
+                        let word_line = rope.char_to_line(name_data.start);
+                        let stack_effect =
+                            if let Some(Token::StackComment(stack_data)) = tokens.get(i + 2) {
+                                let comment_line = rope.char_to_line(stack_data.start);
+                                if comment_line == word_line || comment_line == word_line + 1 {
+                                    Some(stack_data.value.trim().to_string())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
                         // Store with lowercase key for case-insensitive lookup
                         self.definitions
                             .entry(name.to_lowercase())
                             .or_default()
-                            .push((file_path.to_string(), range, None));
+                            .push(DefinitionDetails {
+                                file_path_or_uri: file_path.to_string(),
+                                range,
+                                stack_effect,
+                                doc_comment,
+                                constant_value,
+                                is_colon_definition: false,
+                            });
                     }
                 }
             }
@@ -173,7 +234,7 @@ impl DefinitionIndex {
     pub fn remove_file(&mut self, file_path: &str) {
         // Remove all definitions that reference this file
         for locations in self.definitions.values_mut() {
-            locations.retain(|(path, _, _)| path != file_path);
+            locations.retain(|def| def.file_path_or_uri != file_path);
         }
         self.definitions
             .retain(|_, locations| !locations.is_empty());
@@ -190,9 +251,23 @@ impl DefinitionIndex {
         let mut locations = Vec::new();
 
         if let Some(defs) = self.definitions.get(&word.to_lowercase()) {
-            for (file_path_or_uri, range, _) in defs {
-                if let Some(uri) = crate::utils::uri_helpers::path_str_to_uri(file_path_or_uri) {
-                    locations.push(Location { uri, range: *range });
+            let mut seen = std::collections::HashSet::new();
+            for def in defs {
+                let file_name = def
+                    .file_path_or_uri
+                    .split(['/', '\\'])
+                    .next_back()
+                    .unwrap_or("")
+                    .to_string();
+                if !seen.insert((file_name, def.range.start.line, def.range.start.character)) {
+                    continue;
+                }
+                if let Some(uri) = crate::utils::uri_helpers::path_str_to_uri(&def.file_path_or_uri)
+                {
+                    locations.push(Location {
+                        uri,
+                        range: def.range,
+                    });
                 }
             }
         }
@@ -200,12 +275,32 @@ impl DefinitionIndex {
         locations
     }
 
+    /// Find definition details for a word (case-insensitive)
+    pub fn find_definition_details(&self, word: &str) -> Vec<DefinitionDetails> {
+        let mut defs = self
+            .definitions
+            .get(&word.to_lowercase())
+            .cloned()
+            .unwrap_or_default();
+        let mut seen = std::collections::HashSet::new();
+        defs.retain(|d| {
+            let file_name = d
+                .file_path_or_uri
+                .split(['/', '\\'])
+                .next_back()
+                .unwrap_or("")
+                .to_string();
+            seen.insert((file_name, d.range.start.line, d.range.start.character))
+        });
+        defs
+    }
+
     /// Find the stack effect for the first definition of a word (case-insensitive)
     pub fn find_stack_effect(&self, word: &str) -> Option<String> {
         self.definitions
             .get(&word.to_lowercase())?
             .iter()
-            .find_map(|(_, _, effect)| effect.clone())
+            .find_map(|def| def.stack_effect.clone())
     }
 
     /// Find all references (usages) of a word (case-insensitive)
@@ -248,6 +343,91 @@ impl DefinitionIndex {
 impl Default for DefinitionIndex {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Extracts the value expression preceding a constant or value definition.
+fn extract_constant_value(
+    i: usize,
+    tokens: &[Token],
+    rope: &Rope,
+    definition_token_indices: &std::collections::HashSet<usize>,
+) -> Option<String> {
+    if i == 0 {
+        return None;
+    }
+    let def_line = rope.char_to_line(tokens[i].get_data().start);
+    let mut start_idx = i;
+    for k in (0..i).rev() {
+        let tok = &tokens[k];
+        let tok_data = tok.get_data();
+        let tok_line = rope.char_to_line(tok_data.start);
+        if definition_token_indices.contains(&tok_data.start)
+            || matches!(tok, Token::Semicolon(_) | Token::Colon(_))
+        {
+            break;
+        }
+        if tok_line != def_line && start_idx != i {
+            break;
+        }
+        start_idx = k;
+        if tok_line != def_line {
+            break;
+        }
+    }
+    if start_idx < i {
+        let first_start = tokens[start_idx].get_data().start;
+        let last_end = tokens[i - 1].get_data().end;
+        if first_start < last_end && last_end <= rope.len_chars() {
+            let slice = rope.slice(first_start..last_end).to_string();
+            let trimmed = slice.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Extracts the doc-comment block directly preceding `def_line`.
+/// Scans upward line-by-line starting at `def_line - 1`.
+/// Stops as soon as a line does not start with `\` (e.g. previous definition, blank line, code).
+/// Strips leading `\ ` (or `\` if empty), trims trailing `\r` and whitespace,
+/// and joins the lines with space `" "`.
+fn extract_doc_comment_block(def_line: usize, rope: &Rope) -> Option<String> {
+    if def_line == 0 {
+        return None;
+    }
+    let mut comment_lines = Vec::new();
+    let mut line_idx = def_line - 1;
+    loop {
+        let line = rope.line(line_idx);
+        let line_str = line.to_string();
+        let trimmed = line_str.trim();
+        if trimmed.starts_with('\\') {
+            let content = if let Some(stripped) = trimmed.strip_prefix(r"\ ") {
+                stripped
+            } else if trimmed == "\\" {
+                ""
+            } else if let Some(stripped) = trimmed.strip_prefix('\\') {
+                stripped
+            } else {
+                trimmed
+            };
+            comment_lines.push(content.to_string());
+            if line_idx == 0 {
+                break;
+            }
+            line_idx -= 1;
+        } else {
+            break;
+        }
+    }
+    if comment_lines.is_empty() {
+        None
+    } else {
+        comment_lines.reverse();
+        Some(comment_lines.join(" "))
     }
 }
 
@@ -678,5 +858,103 @@ mod tests {
 
         let refs = index.find_references("syscall0");
         assert_eq!(refs.len(), 1);
+    }
+
+    #[test]
+    fn test_colon_def_with_doc_comment_following_definition_no_blank_line() {
+        let mut index = DefinitionIndex::new();
+        let temp_dir = env::temp_dir();
+        let file_path = temp_dir.join("test.forth").to_string_lossy().to_string();
+
+        let src =
+            "42 constant FOO\n\\ doc comment for my-word\n: my-word ( 0 -- 1 )\n  foo\n  bar ;";
+        index.update_file(&file_path, &Rope::from_str(src));
+
+        let details = index.find_definition_details("my-word");
+        assert_eq!(details.len(), 1);
+        assert_eq!(
+            details[0].doc_comment.as_deref(),
+            Some("doc comment for my-word")
+        );
+        assert_eq!(details[0].stack_effect.as_deref(), Some("( 0 -- 1 )"));
+    }
+
+    #[test]
+    fn test_defining_word_with_doc_comment_following_definition_no_blank_line() {
+        let mut index = DefinitionIndex::new();
+        let temp_dir = env::temp_dir();
+        let file_path = temp_dir.join("test.forth").to_string_lossy().to_string();
+
+        let src = ": prev-word\n  foo\n  bar ;\n\\ doc-comment for qux\nvariable qux";
+        index.update_file(&file_path, &Rope::from_str(src));
+
+        let details = index.find_definition_details("qux");
+        assert_eq!(details.len(), 1);
+        assert_eq!(
+            details[0].doc_comment.as_deref(),
+            Some("doc-comment for qux")
+        );
+        assert_eq!(details[0].stack_effect, None);
+    }
+
+    #[test]
+    fn test_multiline_doc_comment() {
+        let mut index = DefinitionIndex::new();
+        let temp_dir = env::temp_dir();
+        let file_path = temp_dir.join("test.forth").to_string_lossy().to_string();
+
+        let src = "\\ here comes\n\\ some comment block\n\\ documenting word\n: word ... ;";
+        index.update_file(&file_path, &Rope::from_str(src));
+
+        let details = index.find_definition_details("word");
+        assert_eq!(details.len(), 1);
+        assert_eq!(
+            details[0].doc_comment.as_deref(),
+            Some("here comes some comment block documenting word")
+        );
+    }
+
+    #[test]
+    fn test_doc_comment_detached_by_blank_line() {
+        let mut index = DefinitionIndex::new();
+        let temp_dir = env::temp_dir();
+        let file_path = temp_dir.join("test.forth").to_string_lossy().to_string();
+
+        let src = "\\ detached comment\n\n: word 1 ;";
+        index.update_file(&file_path, &Rope::from_str(src));
+
+        let details = index.find_definition_details("word");
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].doc_comment, None);
+    }
+
+    #[test]
+    fn test_stack_comment_on_next_line() {
+        let mut index = DefinitionIndex::new();
+        let temp_dir = env::temp_dir();
+        let file_path = temp_dir.join("test.forth").to_string_lossy().to_string();
+
+        let src = "\\ my doc\n: word\n  ( a -- b )\n  1 ;";
+        index.update_file(&file_path, &Rope::from_str(src));
+
+        let details = index.find_definition_details("word");
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].stack_effect.as_deref(), Some("( a -- b )"));
+        assert_eq!(details[0].doc_comment.as_deref(), Some("my doc"));
+    }
+
+    #[test]
+    fn test_stack_comment_not_immediate() {
+        let mut index = DefinitionIndex::new();
+        let temp_dir = env::temp_dir();
+        let file_path = temp_dir.join("test.forth").to_string_lossy().to_string();
+
+        let src = "\\ my doc\n: word\n  1 2 +\n  ( a -- b ) ;";
+        index.update_file(&file_path, &Rope::from_str(src));
+
+        let details = index.find_definition_details("word");
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].stack_effect, None);
+        assert_eq!(details[0].doc_comment.as_deref(), Some("my doc"));
     }
 }
