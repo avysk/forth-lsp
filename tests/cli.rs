@@ -70,6 +70,66 @@ fn test_help_shows_version_flag() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--version"));
     assert!(stdout.contains("-V"));
+    assert!(stdout.contains("--include"));
+    assert!(stdout.contains("-I"));
+}
+
+#[test]
+fn test_include_flag_short_attached() {
+    let output = Command::new(env!("CARGO_BIN_EXE_forth-lsp"))
+        .arg("-I/custom/include/path")
+        .arg("-V")
+        .output()
+        .expect("failed to execute forth-lsp");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
+fn test_include_flag_short_detached() {
+    let output = Command::new(env!("CARGO_BIN_EXE_forth-lsp"))
+        .arg("-I")
+        .arg("/custom/include/path")
+        .arg("-V")
+        .output()
+        .expect("failed to execute forth-lsp");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
+fn test_include_flag_long() {
+    let output = Command::new(env!("CARGO_BIN_EXE_forth-lsp"))
+        .arg("--include")
+        .arg("/custom/include/path")
+        .arg("-V")
+        .output()
+        .expect("failed to execute forth-lsp");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
+fn test_include_flag_multiple() {
+    let output = Command::new(env!("CARGO_BIN_EXE_forth-lsp"))
+        .arg("-I/path1")
+        .arg("-I")
+        .arg("/path2")
+        .arg("--include")
+        .arg("/path3")
+        .arg("-V")
+        .output()
+        .expect("failed to execute forth-lsp");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), env!("CARGO_PKG_VERSION"));
 }
 
 #[test]

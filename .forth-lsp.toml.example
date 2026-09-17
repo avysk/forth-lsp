@@ -54,3 +54,10 @@ word = "SIMPLEWORD"
 word = "LOADFROM"
 stack = "( addr -- )"
 description = "Loads data from specified address"
+
+[workspace]
+# Additional directories to search for required Forth files and word definitions
+# (such as files referenced via `require`, `include`, or `needs`).
+# Paths can be absolute or relative to the workspace root.
+include = ["lib", "/usr/share/forth"]
+

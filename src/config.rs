@@ -38,6 +38,11 @@ pub struct WorkspaceConfig {
     /// `"target"`, `"node_modules"`, or `"*.gen.fs"`.
     #[serde(default = "default_workspace_exclude")]
     pub exclude: Vec<String>,
+
+    /// Additional directories to search for required Forth files and word definitions.
+    /// Paths can be relative to the workspace root or absolute.
+    #[serde(default, alias = "include_dirs", alias = "include_paths")]
+    pub include: Vec<String>,
 }
 
 impl Default for WorkspaceConfig {
@@ -45,6 +50,7 @@ impl Default for WorkspaceConfig {
         Self {
             extensions: default_forth_extensions(),
             exclude: default_workspace_exclude(),
+            include: Vec::new(),
         }
     }
 }
@@ -79,6 +85,25 @@ impl WorkspaceConfig {
                 })
             })
             .unwrap_or(false)
+    }
+
+    /// Resolves configured include directory paths against the workspace root.
+    /// Absolute paths are preserved, while relative paths are joined to `workspace_root`.
+    /// If no workspace root is available, relative paths are resolved against the current directory.
+    pub fn resolve_include_paths(&self, workspace_root: Option<&Path>) -> Vec<PathBuf> {
+        self.include
+            .iter()
+            .map(|inc| {
+                let path = PathBuf::from(inc);
+                if path.is_absolute() {
+                    path
+                } else if let Some(root) = workspace_root {
+                    root.join(path)
+                } else {
+                    path
+                }
+            })
+            .collect()
     }
 }
 
@@ -623,6 +648,7 @@ mod tests {
         let ws = |patterns: &[&str]| WorkspaceConfig {
             extensions: default_forth_extensions(),
             exclude: patterns.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
         };
         let excluded =
             |patterns: &[&str], name: &str| ws(patterns).is_excluded(&Path::new("/p").join(name));
@@ -663,5 +689,42 @@ mod tests {
         assert_eq!(static_words[0].help, "An inline word");
         assert_eq!(static_words[1].token, "FILEW1");
         assert_eq!(static_words[2].token, "FILEW2");
+    }
+
+    #[test]
+    fn test_workspace_include_config() {
+        let toml_content = r#"
+            [workspace]
+            include = ["lib", "/usr/share/forth"]
+        "#;
+        let config: Config = toml::from_str(toml_content).unwrap();
+        assert_eq!(config.workspace.include, vec!["lib", "/usr/share/forth"]);
+    }
+
+    #[test]
+    fn test_workspace_include_alias() {
+        let toml_content = r#"
+            [workspace]
+            include_dirs = ["common", "vendor"]
+        "#;
+        let config: Config = toml::from_str(toml_content).unwrap();
+        assert_eq!(config.workspace.include, vec!["common", "vendor"]);
+    }
+
+    #[test]
+    fn test_resolve_include_paths() {
+        let ws = WorkspaceConfig {
+            extensions: default_forth_extensions(),
+            exclude: default_workspace_exclude(),
+            include: vec!["lib".to_string(), "/absolute/path".to_string()],
+        };
+
+        let resolved = ws.resolve_include_paths(Some(Path::new("/workspace")));
+        assert_eq!(resolved[0], PathBuf::from("/workspace/lib"));
+        assert_eq!(resolved[1], PathBuf::from("/absolute/path"));
+
+        let resolved_none = ws.resolve_include_paths(None);
+        assert_eq!(resolved_none[0], PathBuf::from("lib"));
+        assert_eq!(resolved_none[1], PathBuf::from("/absolute/path"));
     }
 }
